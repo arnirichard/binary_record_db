@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Data;
 using System.Diagnostics.SymbolStore;
 using System.Linq;
 using System.Net.Mime;
@@ -100,6 +101,11 @@ namespace BinaryDB
 
 		public async Task<List<Record>> WriteAsync (Record record)
 		{
+			if(!IsLoaded)
+			{
+				throw new Exception("DB is not loaded or has been disposed");
+			}
+
 			// 1. Find Id if needed
 			// All attachments should be written as reference
 			List<Record> result = GetRecordsToWrite (record);
@@ -168,7 +174,7 @@ namespace BinaryDB
 
 		public async Task<Record?> ReadAsync (long id, bool includeWA = true)
 		{
-			if(id <= 0)
+			if(id <= 0 || !IsLoaded)
 			{
 				return null;
 			}
@@ -268,6 +274,7 @@ namespace BinaryDB
 
 		public void Dispose ()
 		{
+			IsLoaded = false;
 			idFS.Dispose ();
 			indexFS.Dispose ();
 			dataFS.Dispose ();
@@ -289,7 +296,8 @@ namespace BinaryDB
 				}
 			}
 			waQueue = await WA.ReadWaFile (waFS, fileSizes.WaStart, fileSizes.WaEnd);
-		}
+			IsLoaded = true;
+        }
 
 		List<Record> GetRecordsToWrite(Record record)
 		{
@@ -403,7 +411,18 @@ namespace BinaryDB
 			}
 		}
 
-		public static async Task<BinaryDB> LoadOrCreateAsync (string name, string folder)
+		public static void DeleteDB(string name, string folder)
+		{
+            (string idFN, string indexFN, string dataFN, string waFN, string fsFN) = GetFileNames(name, folder);
+
+			File.Delete(idFN);
+			File.Delete(indexFN);
+			File.Delete(dataFN);
+			File.Delete(waFN);
+			File.Delete(fsFN);
+        }
+
+		public static async Task<BinaryDB> LoadOrCreateDBAsync (string name, string folder)
 		{
 			if (!Directory.Exists (folder)) 
 			{
@@ -412,21 +431,17 @@ namespace BinaryDB
 
 			name = name.ToUpper ();
 
-			string idFileName = Path.Combine (folder, name + ID_FILE_SUFFIX);
-			string indexFileName = Path.Combine (folder, name + INDEX_FILE_SUFFIX);
-			string dataFileName = Path.Combine (folder, name + DATA_FILE_SUFFIX);
-			string waFileName = Path.Combine (folder, name + WA_FILE_SUFFIX);
-			string fsFileName = Path.Combine (folder, name + FS_FILE_SUFFIX);
+			(string idFN, string indexFN, string dataFN, string waFN, string fsFN) = GetFileNames(name, folder);
 
-			FileStream? idFS = null, indexFS = null, dataFS = null, waFS = null, fsFS = null;
+            FileStream? idFS = null, indexFS = null, dataFS = null, waFS = null, fsFS = null;
 
 			try 
 			{
-				idFS = new FileStream (idFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
-				indexFS = new FileStream (indexFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
-				dataFS = new FileStream (dataFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
-				waFS = new FileStream (waFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
-				fsFS = new FileStream (fsFileName, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				idFS = new FileStream (idFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				indexFS = new FileStream (indexFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				dataFS = new FileStream (dataFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				waFS = new FileStream (waFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				fsFS = new FileStream (fsFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
 				FileSizes fs = await FS.ReadOrCreateFileSizes (fsFS);
 
 				BinaryDB result = new BinaryDB (name, folder, idFS, indexFS, dataFS, waFS, fsFS, fs);
@@ -444,5 +459,17 @@ namespace BinaryDB
 				throw;
 			}
 		}
+
+		static (string idFN, string indexFN, string dataFN, string waFN, string fsFN) GetFileNames(string name, string folder)
+		{
+            string id = Path.Combine(folder, name + ID_FILE_SUFFIX);
+            string index= Path.Combine(folder, name + INDEX_FILE_SUFFIX);
+            string data = Path.Combine(folder, name + DATA_FILE_SUFFIX);
+            string wa = Path.Combine(folder, name + WA_FILE_SUFFIX);
+            string fs = Path.Combine(folder, name + FS_FILE_SUFFIX);
+
+			return (id, index, data, wa, fs);
+        }
+
 	}
 }
