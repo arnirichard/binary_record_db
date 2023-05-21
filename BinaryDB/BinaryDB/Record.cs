@@ -15,7 +15,21 @@ namespace BinaryDB
 		DeletedWithAttachments,
 	}
 
-	public class Record
+    public class RecordId
+    {
+        public long Id;
+        public string? ExtId;
+        public int Type;
+
+		public RecordId(long id, int type, string? extId)
+		{
+			Id = id;
+			Type = type;
+			ExtId = extId;
+		}
+    }
+
+    public class Record
 	{
 		public long Id { get; internal set; }
 		public string? ExtId { get; private set; }

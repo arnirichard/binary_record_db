@@ -39,7 +39,7 @@ namespace BinaryDB
 		}
 	}
 
-	public class BinaryDB
+    public class BinaryDB
 	{
 		const string SUFFIX = "bdb";
 		const string ID_FILE_SUFFIX = "_ID." + SUFFIX;
@@ -63,9 +63,6 @@ namespace BinaryDB
 		// Attachment file (attributes, attachments)
 		// WriteAhead file (new record is written here)
 		// => id, extId, State, attributes, attachments
-
-		// Attribute (Length, Id, type (data or record), data/record)
-
 		FileStream idFS, indexFS, dataFS, waFS, fsFS;
 		FileSizes fileSizes;
 		TaskQueue taskQueue = new TaskQueue ();
@@ -75,10 +72,10 @@ namespace BinaryDB
 		Dictionary<string, long> idLookup = new ();
 		long nextId = 1;
 		object nextIdLock = new ();
-		// WA
+		// Write Ahead
 		Queue<Record> waQueue = new ();
 		ReadOnlyCollection<Record> waList = new ReadOnlyCollection<Record>(new List<Record>());
-		// INDEX, for record, index in data file
+		// Data position
 		Dictionary<long, FilePos> idIndex = new ();
 
 		BinaryDB (string name, string folder,
