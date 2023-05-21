@@ -1,7 +1,7 @@
 # binary_record_db
 Database that stores recursive records containing binary data fields
 
-The porpose is to create a simple thread-safe database with the following properties
+The purpose is to create a simple thread-safe database with the following properties
 
 1. Only one record type is supported, Record, which contains Id (long), external Id (string), list of attributes and list of attachments (Records)
 2. External Id (string) must be provided for each unique record
