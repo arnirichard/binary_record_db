@@ -1,4 +1,5 @@
-﻿using System;
+﻿using BinaryDB.Utils;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data;
@@ -97,7 +98,7 @@ namespace BinaryDB
 		// Attachment file (attributes, attachments)
 		// WriteAhead file (new record is written here)
 		// => id, extId, State, attributes, attachments
-		FileStream idFS, indexFS, dataFS, waFS, fsFS;
+		FileStreams fileStreams;
 		FileSizes fileSizes;
 		TaskQueue taskQueue = new TaskQueue ();
 
@@ -114,17 +115,12 @@ namespace BinaryDB
 		Dictionary<long, FilePos> idIndex = new ();
 
 		BinaryDB (string name, string folder,
-			FileStream idFS, FileStream indexFS,
-			FileStream dataFS, FileStream waFS, FileStream fsFS,
+            FileStreams fileStreams,
 			FileSizes fileSizes)
 		{
 			this.folder = folder;
 			this.name = name;
-			this.idFS = idFS;
-			this.dataFS = dataFS;
-			this.indexFS = indexFS;
-			this.waFS = waFS;
-			this.fsFS = fsFS;
+			this.fileStreams = fileStreams;
 			this.fileSizes = fileSizes;
 		}
 
@@ -154,14 +150,14 @@ namespace BinaryDB
 					{
 						bool writeId;
 						lock (idLookup)
-							writeId = !idsToWrite.ContainsKey(r.Id.Id);
+							writeId = idsToWrite.ContainsKey(r.Id.Id);
 						if(writeId)
 						{ 
-                            idLength = await ID.WriteId(idFS, r.Id, idLength);
+                            idLength = await ID.WriteId(fileStreams.ID, r.Id, idLength);
                             lock (idLookup)
                                 idsToWrite.Remove(r.Id.Id);
                         }
-                        waEnd = await WA.WriteRecord (r, waFS, waEnd);
+                        waEnd = await WA.WriteRecord (r, fileStreams.WA, waEnd);
 					}
 
 					// Write WaStart, WaEnd, IdLength to file
@@ -170,7 +166,7 @@ namespace BinaryDB
 						fileSizes = new FileSizes((byte)(fileSizes.Start == 1 ? 21 : 1),
 								fileSizes.WaStart, waEnd,
 								idLength, fileSizes.IndexLength, fileSizes.DataLength);
-                        await FS.WriteFileSizes (fsFS, fileSizes);
+                        await FS.WriteFileSizes (fileStreams.FS, fileSizes);
 					}, WRITE_FS_JOB_ID);
 
 					lock (waQueue)
@@ -244,7 +240,7 @@ namespace BinaryDB
 					}
 
 					// 1. Read from data file
-					record = await DATA.ReadRecord (dataFS, index.Position);
+					record = await DATA.ReadRecord (fileStreams.Data, index.Position);
 
                     // 2. Merge with changes in WA
                     if (record != null && includeWA && waList1.Count > 0)
@@ -308,17 +304,13 @@ namespace BinaryDB
 		public void Dispose ()
 		{
 			IsLoaded = false;
-			idFS.Dispose ();
-			indexFS.Dispose ();
-			dataFS.Dispose ();
-			waFS.Dispose ();
-			fsFS.Dispose();
+			fileStreams.Dispose();
         }
 
 		async Task Load()
 		{
-			idIndex = await INDEX.ReadIndexFile (indexFS, fileSizes.IndexLength);
-			idLookup = await ID.ReadIdFile(idFS, fileSizes.IdLength);
+			idIndex = await INDEX.ReadIndexFile (fileStreams.Index, fileSizes.IndexLength);
+			idLookup = await ID.ReadIdFile(fileStreams.ID, fileSizes.IdLength);
 			
 			foreach (var kvp in idLookup)
 			{
@@ -328,7 +320,7 @@ namespace BinaryDB
 					nextId = kvp.Value.Id + 1;
 				}
 			}
-			waQueue = await WA.ReadWaFile (waFS, fileSizes.WaStart, fileSizes.WaEnd);
+			waQueue = await WA.ReadWaFile (fileStreams.WA, fileSizes.WaStart, fileSizes.WaEnd);
 			IsLoaded = true;
         }
 
@@ -362,6 +354,7 @@ namespace BinaryDB
 					if(!idLookup.TryGetValue(id.Id, out result))
 					{
 						result = id;
+                        AddRecordId(result);
                     }
 				}
 				else
@@ -369,6 +362,7 @@ namespace BinaryDB
 					if(!extIdLookup.TryGetValue(id.ToTypeExtId(), out result))
 					{
 						result = new RecordId(GetNextId(), id.Type, id.ExtId);
+						AddRecordId(result);
                     }
 				}
 			}
@@ -383,7 +377,6 @@ namespace BinaryDB
 				idLookup[id.Id] = id;
 				extIdLookup[id.ToTypeExtId()] = id;
 				idsToWrite[id.Id] = id;
-
             }
         }
 
@@ -446,7 +439,7 @@ namespace BinaryDB
 			}
 
 			// 3. Write to Data file
-			(long dataLength, List<int> lengths) = await DATA.WriteRecords (dataFS, merged, fileSizes.DataLength);
+			(long dataLength, List<int> lengths) = await DATA.WriteRecords (fileStreams.Data, merged, fileSizes.DataLength);
 
 			lock(idIndex)
 			{
@@ -459,7 +452,7 @@ namespace BinaryDB
 			}
 
 			// 4. Write Index to Index file
-			long indexLength = await INDEX.WriteIndexes (indexFS, merged, lengths, fileSizes.DataLength, fileSizes.IndexLength);
+			long indexLength = await INDEX.WriteIndexes (fileStreams.Index, merged, lengths, fileSizes.DataLength, fileSizes.IndexLength);
 
 			// 5. Update FS
 			taskQueue.AddTask (async delegate
@@ -468,7 +461,7 @@ namespace BinaryDB
                         waEnd, fileSizes.WaEnd,
 						fileSizes.IdLength,
 						indexLength, dataLength);
-                await FS.WriteFileSizes (fsFS, fileSizes);
+                await FS.WriteFileSizes (fileStreams.FS, fileSizes);
 			}, WRITE_FS_JOB_ID);
 
 			RemoveFromWaQueue (records);
@@ -529,9 +522,9 @@ namespace BinaryDB
 				dataFS = new FileStream (dataFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
 				waFS = new FileStream (waFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
 				fsFS = new FileStream (fsFN, FileMode.OpenOrCreate, FileAccess.ReadWrite);
+				FileStreams fileStreams = new FileStreams(idFS, indexFS, dataFS, waFS, fsFS);
 				FileSizes fs = await FS.ReadOrCreateFileSizes (fsFS);
-
-				BinaryDB result = new BinaryDB (name, folder, idFS, indexFS, dataFS, waFS, fsFS, fs);
+				BinaryDB result = new BinaryDB (name, folder, fileStreams, fs);
 				await result.Load ();
 
 				return result;
