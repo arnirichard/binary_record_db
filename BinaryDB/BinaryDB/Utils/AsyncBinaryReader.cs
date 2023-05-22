@@ -38,7 +38,18 @@ namespace BinaryDB.Utils
 			return BitConverter.ToInt32 (buffer, 0);
 		}
 
-		public async Task<long> ReadLongAsync ()
+        public async Task<int?> ReadNullableIntAsync()
+        {
+			byte b = _reader.ReadByte();
+			if(b > 0) 
+			{
+				return null;
+			}
+            byte[] buffer = await ReadBytesAsync(sizeof(int));
+            return BitConverter.ToInt32(buffer, 0);
+        }
+
+        public async Task<long> ReadLongAsync ()
 		{
 			byte[] buffer = await ReadBytesAsync (sizeof (long));
 			return BitConverter.ToInt64 (buffer, 0);

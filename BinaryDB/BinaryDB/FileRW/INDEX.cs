@@ -42,7 +42,7 @@ namespace BinaryDB
 				int length;
 				for (int i = 0; i < merged.Count; i++) 
 				{
-					await bw.WriteAsync (merged[i].Id);
+					await bw.WriteAsync (merged[i].Id.Id);
 					await bw.WriteAsync (index);
 					length = lengths[i];
 					await bw.WriteAsync (length);

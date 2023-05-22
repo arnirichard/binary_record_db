@@ -17,33 +17,37 @@ namespace BinaryDBTest
             string testFolder = @"C:\Temp\DBTEST";
             BinaryDB.BinaryDB.DeleteDB(dbName, testFolder);
             string extId = "record1";
+            int type = 1;
 
             var db = await BinaryDB.BinaryDB.LoadOrCreateDBAsync(dbName, testFolder);
             byte[] data = new byte[] { 0x01, 0x02 };
             var attribute1 = new BinaryDB.Attribute("Field1", data);
-            List<Record> result = await db.WriteAsync(new BinaryDB.Record(extId,
-                new List<BinaryDB.Attribute>() { attribute1 },
-                null,
-                state: BinaryDB.RecordState.Full));
+            List<Record> result = await db.WriteAsync(
+                new BinaryDB.Record(new RecordId(extId, type),
+                    new List<BinaryDB.Attribute>() { attribute1 },
+                    null,
+                    state: RecordState.Full));
 
             db.Dispose();
 
             db = await BinaryDB.BinaryDB.LoadOrCreateDBAsync("test", @"C:\Temp\DBTEST");
 
-            var result2 = await db.Read(extId);
+            var result2 = await db.Read(extId, type);
 
             bool passed = false;
-            bool isRecordIdIdentical = result2 != null && result.Count == 1 && result2.Id == result[0].Id;
+            bool isRecordIdIdentical = result2 != null && result.Count == 1 && result2.Id.Id == result[0].Id.Id;
 
             Assert.IsTrue(isRecordIdIdentical, "Saved record Id is not identical to retrieved Id");
             if(isRecordIdIdentical)
                 Assert.IsTrue(passed = result2 != null && HasAttribute(result2, attribute1));
+            if (passed)
+                Assert.IsTrue(result2?.Id.Type == result[0].Id.Type);
 
             if(passed)
             {
                 byte[] data2 = new byte[] { 0x02, 0x03 };
                 var attribute2 = new BinaryDB.Attribute("Field2", data2);
-                var result3 = await db.WriteAsync(new BinaryDB.Record(extId,
+                var result3 = await db.WriteAsync(new BinaryDB.Record(new RecordId(extId, type),
                    new List<BinaryDB.Attribute>() { attribute2 },
                    null,
                    state: BinaryDB.RecordState.Partial));
@@ -52,10 +56,10 @@ namespace BinaryDBTest
 
                 db = await BinaryDB.BinaryDB.LoadOrCreateDBAsync("test", @"C:\Temp\DBTEST");
 
-                result2 = await db.Read(extId);
+                result2 = await db.Read(extId, type);
 
 
-                Assert.IsTrue(passed = result2 != null && result.Count == 1 && result2.Id == result3[0].Id);
+                Assert.IsTrue(passed = result2 != null && result.Count == 1 && result2.Id.Id == result3[0].Id.Id);
                 if(passed)
                     Assert.IsTrue(passed = result2 != null && HasAttribute(result2, attribute1));
                 if(passed)

@@ -58,7 +58,7 @@ namespace BinaryDB
 			using(AsyncBinaryWriter bw = new AsyncBinaryWriter(fs)) 
 			{
                 fs.Seek(0, SeekOrigin.Begin);
-				bw.Write(f.Start);
+				bw.WriteByte(f.Start);
 
 				fs.Seek(f.Start, SeekOrigin.Begin);
                 await bw.WriteAsync (f.WaStart);

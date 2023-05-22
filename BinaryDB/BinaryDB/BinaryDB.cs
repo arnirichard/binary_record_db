@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.SymbolStore;
 using System.Linq;
 using System.Net.Mime;
@@ -39,6 +40,39 @@ namespace BinaryDB
 		}
 	}
 
+	struct TypeExtId
+	{
+		public string? ExtId;
+        public int? Type;
+
+		public TypeExtId(string? extId, int? type)
+		{
+			ExtId = extId;
+			Type = type;
+		}
+
+        public override bool Equals([NotNullWhen(true)] object? obj)
+        {
+            if (obj is TypeExtId other)
+            {
+                return ExtId == other.ExtId && Type == other.Type;
+            }
+
+            return false;
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = hash * 23 + (ExtId?.GetHashCode() ?? 0);
+                hash = hash * 23 + (Type?.GetHashCode() ?? 0);
+                return hash;
+            }
+        }
+    }
+
     public class BinaryDB
 	{
 		const string SUFFIX = "bdb";
@@ -68,8 +102,9 @@ namespace BinaryDB
 		TaskQueue taskQueue = new TaskQueue ();
 
 		// ID
-		Dictionary<long, string> extIdLookup = new ();
-		Dictionary<string, long> idLookup = new ();
+		Dictionary<long, RecordId> idLookup = new ();
+		Dictionary<TypeExtId, RecordId> extIdLookup = new ();
+		Dictionary<long, RecordId> idsToWrite = new();
 		long nextId = 1;
 		object nextIdLock = new ();
 		// Write Ahead
@@ -117,13 +152,16 @@ namespace BinaryDB
 
 					foreach (var r in result)
 					{
-						waEnd = await WA.WriteRecord (r, waFS, waEnd);
-						if (!extIdLookup.ContainsKey (r.Id) && r.ExtId != null) 
-						{
-							extIdLookup[r.Id] = r.ExtId;
-							idLookup[r.ExtId] = r.Id;
-							idLength = await ID.WriteId (idFS, r.Id, r.ExtId, idLength);
-						}
+						bool writeId;
+						lock (idLookup)
+							writeId = !idsToWrite.ContainsKey(r.Id.Id);
+						if(writeId)
+						{ 
+                            idLength = await ID.WriteId(idFS, r.Id, idLength);
+                            lock (idLookup)
+                                idsToWrite.Remove(r.Id.Id);
+                        }
+                        waEnd = await WA.WriteRecord (r, waFS, waEnd);
 					}
 
 					// Write WaStart, WaEnd, IdLength to file
@@ -166,7 +204,13 @@ namespace BinaryDB
 
 		public async Task<List<Record>> DeleteAsync(long id, bool withAttachments = true)
 		{
-			return await WriteAsync (Record.Deleted (id, withAttachments));
+			RecordId? rid = Get(new RecordId(id));
+			if(rid == null)
+			{
+				return new List<Record>();
+			}
+			return await WriteAsync (
+				new Record(rid, withAttachments ? RecordState.DeletedWithAttachments : RecordState.Deleted));
 		}
 
 		public async Task<Record?> ReadAsync (long id, bool includeWA = true)
@@ -205,17 +249,17 @@ namespace BinaryDB
                     // 2. Merge with changes in WA
                     if (record != null && includeWA && waList1.Count > 0)
 					{
-						Dictionary<long, Record> ids = record.GetRecordsWithIds ().ToDictionary (r => r.Id, r => r);
+						Dictionary<long, Record> ids = record.GetRecordsWithIds ().ToDictionary (r => r.Id.Id, r => r);
 						taskQueue.AddTask (delegate 
 						{
 							List<(Record mergeFrom, Record mergeInto)> toMerge = waList
-								.Where (r => ids.ContainsKey(r.Id))
-								.Select(m => (m, ids[m.Id]))
+								.Where (r => ids.ContainsKey(r.Id.Id))
+								.Select(m => (m, ids[m.Id.Id]))
 								.ToList();
 
 							foreach(var merge in toMerge)
 							{
-								ids[merge.mergeFrom.Id] = merge.mergeFrom.Merge (merge.mergeInto);
+								ids[merge.mergeFrom.Id.Id] = merge.mergeFrom.Merge (merge.mergeInto);
 							}
                             
 							tcs.SetResult(record);
@@ -232,31 +276,23 @@ namespace BinaryDB
 			return await tcs.Task;
 		}
 
-		public async Task<Record?> Read (string extId)
+		public async Task<Record?> Read (string extId, int? type = null)
 		{
-			long? id = GetId (extId);
+			long? id = GetId (type, extId);
 
 			return id != null
 				? await ReadAsync(id ?? 0)
 				: null;
 		}
 
-		public string? GetExtId (long id)
-		{
-			string? result;
-			lock (extIdLookup)
-				extIdLookup.TryGetValue (id, out result);
-			return result;
-		}
-
-		public long? GetId (string? extId)
+		public long? GetId (int? type, string? extId)
 		{
 			if (extId == null)
 				return null;
-			long result;
+			RecordId? result;
 			lock (idLookup)
-				idLookup.TryGetValue (extId, out result);
-			return result > 0 ? result : null;
+                extIdLookup.TryGetValue (new TypeExtId(extId, type), out result);
+			return result?.Id;
 		}
 
 		long GetNextId()
@@ -286,22 +322,75 @@ namespace BinaryDB
 			
 			foreach (var kvp in idLookup)
 			{
-				extIdLookup[kvp.Value] = kvp.Key;
-				if(kvp.Value >= nextId) 
+				extIdLookup[kvp.Value.ToTypeExtId()] = kvp.Value;
+				if(kvp.Value.Id >= nextId) 
 				{
-					nextId = kvp.Value + 1;
+					nextId = kvp.Value.Id + 1;
 				}
 			}
 			waQueue = await WA.ReadWaFile (waFS, fileSizes.WaStart, fileSizes.WaEnd);
 			IsLoaded = true;
         }
 
+        RecordId? Get(RecordId id)
+		{
+            RecordId? result;
+
+            lock (idLookup)
+            {
+                if (id.Id > 0)
+                {
+					idLookup.TryGetValue(id.Id, out result);
+                }
+                else
+                {
+					extIdLookup.TryGetValue(id.ToTypeExtId(), out result);
+                }
+            }
+
+			return result;
+        }
+
+		RecordId GetOrCreateNew(RecordId id)
+		{
+			RecordId? result;
+
+			lock (idLookup)
+			{
+				if (id.Id > 0)
+				{
+					if(!idLookup.TryGetValue(id.Id, out result))
+					{
+						result = id;
+                    }
+				}
+				else
+				{
+					if(!extIdLookup.TryGetValue(id.ToTypeExtId(), out result))
+					{
+						result = new RecordId(GetNextId(), id.Type, id.ExtId);
+                    }
+				}
+			}
+
+			return result;
+		}
+
+		void AddRecordId(RecordId id)
+		{
+			lock (idLookup)
+			{
+				idLookup[id.Id] = id;
+				extIdLookup[id.ToTypeExtId()] = id;
+				idsToWrite[id.Id] = id;
+
+            }
+        }
+
 		List<Record> GetRecordsToWrite(Record record)
 		{
 			List<Record> result = new ();
 
-			if(record.Id <= 0)
-				record.Id = GetId (record.ExtId) ?? GetNextId (); ;
 			List<Record> process = new List<Record> () { record };
 			List<Record> next = new List<Record> ();
 
@@ -309,34 +398,35 @@ namespace BinaryDB
 			{
 				foreach(var r in process) 
 				{
-					List<Record> references = new ();
+					result.Add(r);
 
-					if (r.Attachments?.Count > 0) 
+                    if (r.Attachments?.Count > 0) 
 					{
 						foreach(var a in r.Attachments) 
 						{
-							if(a.Id < 0) 
-							{
-								a.Id = GetId (a.ExtId) ?? GetNextId ();
-							}
 							next.Add (a);
-							references.Add (Record.Reference (a.Id));
 						}
 					}
-
-					result.Add(new Record (GetId (record.ExtId) ?? GetNextId (),
-						record.Attributes?.ToList (),
-						references,
-						record.State,
-						record.ExtId));
 				}
 
 				process = next;
 				next = new ();
 			}
 
-			return result;
+			return result.Select(CreateCopyWithReferences).ToList();
 		}
+
+		Record CreateCopyWithReferences(Record record)
+		{
+			RecordId id = GetOrCreateNew(record.Id);
+
+            return new Record(id,
+						record.Attributes?.ToList(),
+						// There is case of reference that is non-existing
+						// What if reference is being create in same write?
+                        record.Attachments?.Select(a => new Record(GetOrCreateNew(a.Id).Id)).ToList(),
+						record.State);
+        }
 
 		async Task WriteRecords(List<Record> records, long waEnd)
 		{
@@ -344,14 +434,14 @@ namespace BinaryDB
 			Dictionary<long, Record?> dict = new ();
 			foreach(var id in records.Select (r => r.Id).Distinct ()) 
 			{
-				dict[id] = await ReadAsync (id, includeWA: false);
+				dict[id.Id] = await ReadAsync (id.Id, includeWA: false);
 			}
 
 			// 2. Merge
 			List<Record> merged = new ();
 			foreach(var record in records) 
 			{
-				Record? mergeFrom = dict[record.Id];
+				Record? mergeFrom = dict[record.Id.Id];
 				merged.Add(mergeFrom?.Merge(record) ?? record);
 			}
 
@@ -363,7 +453,7 @@ namespace BinaryDB
 				long index = fileSizes.DataLength;
 				for(int i = 0; i < merged.Count; i++)
 				{
-					idIndex[merged[i].Id] = new FilePos(index, lengths[i]);
+					idIndex[merged[i].Id.Id] = new FilePos(index, lengths[i]);
 					index += lengths[i];
 				}
 			}

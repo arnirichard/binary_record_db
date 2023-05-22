@@ -17,35 +17,44 @@ namespace BinaryDB
 
     public class RecordId
     {
-        public long Id;
-        public string? ExtId;
-        public int Type;
+		// Either Id or ExtId must be assigned
+        public readonly long Id;
+        public readonly string? ExtId;
+        public readonly int? Type;
 
-		public RecordId(long id, int type, string? extId)
+		public RecordId(long id, int? type = null, string? extId = null)
 		{
 			Id = id;
 			Type = type;
 			ExtId = extId;
 		}
+
+        public RecordId(string extId, int? type = null)
+        {
+            ExtId = extId;
+            Type = type;
+        }
+
+        internal TypeExtId ToTypeExtId()
+		{
+			return new TypeExtId(ExtId, Type);
+		}
     }
 
     public class Record
 	{
-		public long Id { get; internal set; }
-		public string? ExtId { get; private set; }
+		public RecordId Id { get; internal set; }
 		public RecordState State { get; init; }
 		public ReadOnlyCollection<Attribute>? Attributes { get; init; }
 		public ReadOnlyCollection<Record>? Attachments { get; init; }
 
-		public Record(long id,
+		public Record(RecordId id,
 			List<Attribute>? attributes,
 			List<Record>? attachments,
-			RecordState state = RecordState.Full, 
-			string? extId = null)
+			RecordState state = RecordState.Full)
 		{
 			Id = id;
 			State = state;
-			ExtId = extId;
 			Attributes = attributes != null
 				? new ReadOnlyCollection<Attribute>(attributes)
 				: null;
@@ -54,31 +63,23 @@ namespace BinaryDB
 				: null;
 		}
 
-		public Record (string? extId,
-			List<Attribute>? attributes,
-			List<Record>? attachments,
-			RecordState state = RecordState.Full) : this(0, attributes, attachments, state, extId) {}
-
-		Record(long id, RecordState state)
+		public Record(long id, RecordState state = RecordState.Reference)
 		{
-			Id = id; 
+			Id = new RecordId(id, null, null); 
 			State = state;
 		}
 
-		public static Record Reference(long id)
-		{
-			return new Record (id, state: RecordState.Reference);
-		}
-
-		public static Record Deleted (long id, bool withAttachments)
-		{
-			return new Record (id, state: withAttachments ? RecordState.DeletedWithAttachments : RecordState.Deleted);
-		}
+        public Record(RecordId id, RecordState state = RecordState.Reference)
+        {
+            Id = id;
+            State = state;
+        }
 
 		internal async Task WriteAsync (AsyncBinaryWriter bw)
 		{
-			await bw.WriteAsync(Id);
-			await bw.WriteAsync (ExtId ?? "");
+			await bw.WriteAsync(Id.Id);
+            await bw.WriteAsync(Id.Type);
+            await bw.WriteAsync (Id.ExtId);
 			await bw.WriteAsync ((int) State);
 			await bw.WriteAsync (Attributes?.Count ?? 0);
 
@@ -100,6 +101,7 @@ namespace BinaryDB
 		internal static async Task<Record> ReadAsync(AsyncBinaryReader br)
 		{
 			long id = await br.ReadLongAsync ();
+			int? type = await br.ReadNullableIntAsync();
 			string? extId = await br.ReadStringAsync ();
 			RecordState state = (RecordState) await br.ReadIntAsync ();
 			int attributesCount = await br.ReadIntAsync ();
@@ -113,7 +115,7 @@ namespace BinaryDB
 			for (int i = 0; i < recordsCount; i++) {
 				records.Add (await Record.ReadAsync(br));
 			}
-			return new Record (id, attributes, records, state: state, extId: extId);
+			return new Record (new RecordId(id, type, extId), attributes, records, state: state);
 		}
 
 		public List<Record> GetRecordsWithIds()
@@ -127,8 +129,10 @@ namespace BinaryDB
 			{
 				foreach(var record in process) 
 				{
-					if(record.Id > 0)
-						result.Add (record);
+					if (record.Id.Id > 0)
+					{
+						result.Add(record);
+					}
 
 					if(record.Attachments?.Count > 0) 
 					{
@@ -160,8 +164,7 @@ namespace BinaryDB
 			return new Record (Id,
 				attributes: mergedAttributes,
 				attachments: mergedAttachments,
-				state: RecordState.Full,
-				extId: ExtId);
+				state: RecordState.Full);
 		}
 	}
 }

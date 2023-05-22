@@ -39,7 +39,7 @@ namespace BinaryDB
             }
 		}
 
-        public void Write(byte value)
+        public void WriteByte(byte value)
         {
             _writer.BaseStream.WriteByte(value);
         }
@@ -50,7 +50,17 @@ namespace BinaryDB
 			await _writer.BaseStream.WriteAsync (buffer, 0, buffer.Length);
 		}
 
-		public async Task WriteAsync (long value)
+        public async Task WriteAsync(int? value)
+        {
+			WriteByte((byte)(value == null ? 1 : 0));
+			if (value != null)
+			{
+				byte[] buffer = BitConverter.GetBytes(value.Value);
+				await _writer.BaseStream.WriteAsync(buffer, 0, buffer.Length);
+			}
+        }
+
+        public async Task WriteAsync (long value)
 		{
 			byte[] buffer = BitConverter.GetBytes (value);
 			await _writer.BaseStream.WriteAsync (buffer, 0, buffer.Length);
