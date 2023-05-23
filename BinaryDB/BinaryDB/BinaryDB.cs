@@ -240,7 +240,7 @@ namespace BinaryDB
 					}
 
 					// Read record
-					record = await DATA.ReadRecord (fileStreams.Data, index.Position);
+					record = await DATA.ReadRecord (fileStreams.Data, index.Position, rid);
 
                     // Merge with changes in WA
                     if (record != null && includeWA && waList1.Count > 0)
@@ -324,6 +324,14 @@ namespace BinaryDB
 				}
 			}
 			waQueue = await WA.ReadWaFile (fileStreams.WA, fileSizes.WaStart, fileSizes.WaEnd);
+			RecordId? rid;
+			foreach(var record in waQueue)
+			{
+				if(idLookup.TryGetValue(record.Id.Id, out rid))
+				{
+					record.Id = rid;
+                }
+			}
 			IsLoaded = true;
         }
 

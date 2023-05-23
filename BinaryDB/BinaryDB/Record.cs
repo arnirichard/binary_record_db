@@ -7,17 +7,6 @@ using BinaryDB.Utils;
 namespace BinaryDB
 {
 
-    //using System.Security.Cryptography;
-
-    //// Calculate the CRC32 checksum for a byte array
-    //uint CalculateChecksum(byte[] data)
-    //{
-    //    using (var crc32 = new CRC32())
-    //    {
-    //        return crc32.ComputeHash(data);
-    //    }
-    //}
-
     public class RecordId
     {
 		// Negative Id for attachment?
@@ -92,12 +81,8 @@ namespace BinaryDB
 		internal async Task WriteAsync (AsyncBinaryWriter bw)
 		{
 			await bw.WriteAsync(Id.Id);
-			// But this is in ID file, should skip?
-            await bw.WriteAsync(Id.Type);
-            await bw.WriteAsync (Id.ExtId);
 			await bw.WriteAsync ((int) State);
 			await bw.WriteAsync (Attributes?.Count ?? 0);
-
 			if (Attributes != null)
 				foreach (var attr in Attributes) 
 				{
@@ -105,11 +90,9 @@ namespace BinaryDB
 				}
 		}
 
-		internal static async Task<Record> ReadAsync(AsyncBinaryReader br)
+		internal static async Task<Record> ReadAsync(AsyncBinaryReader br, RecordId? rid)
 		{
 			long id = await br.ReadLongAsync ();
-			int? type = await br.ReadNullableIntAsync();
-			string? extId = await br.ReadStringAsync ();
 			RecordState state = (RecordState) await br.ReadIntAsync ();
 			int attributesCount = await br.ReadIntAsync ();
 			List<Field> attributes = new ();
@@ -117,7 +100,7 @@ namespace BinaryDB
 			{
 				attributes.Add (await Field.Read (br));
 			}
-			return new Record (new RecordId(id, type, extId), attributes, state: state);
+			return new Record (rid ?? new RecordId(id), attributes, state: state);
 		}
 
 		public List<Record> GetRecordsWithIds()

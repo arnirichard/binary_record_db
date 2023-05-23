@@ -19,7 +19,7 @@ namespace BinaryDB
 			{
 				while (fs.Position < end)
 				{
-					records.Enqueue(await Record.ReadAsync (br));
+					records.Enqueue(await Record.ReadAsync (br, null));
 				}
 			}
 			

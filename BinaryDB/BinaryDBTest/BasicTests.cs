@@ -86,7 +86,7 @@ namespace BinaryDBTest
             Record attachment = new Record(new RecordId("attachment1", 2),
                 new List<BinaryDB.Field>() { attribute2 },
                 state: RecordState.Full);
-            var attribute3 = new BinaryDB.Field(3, FieldState.Attachment, record: attachment);
+             var attribute3 = new BinaryDB.Field(3, FieldState.Attachment, record: attachment);
             List<Record> result = await db.WriteAsync(
                 new BinaryDB.Record(new RecordId(recordExtId, recordType),
                     new List<BinaryDB.Field>() { attribute1, attribute3 },

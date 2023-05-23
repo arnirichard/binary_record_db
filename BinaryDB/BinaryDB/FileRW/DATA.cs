@@ -11,13 +11,13 @@ namespace BinaryDB
 {
 	internal static class DATA
 	{
-		public async static Task<Record?> ReadRecord(FileStream fs, long index)
+		public async static Task<Record?> ReadRecord(FileStream fs, long index, RecordId rid)
 		{
 			fs.Seek (index, SeekOrigin.Begin);
 
 			using (AsyncBinaryReader br = new AsyncBinaryReader (fs)) 
 			{
-				return await Record.ReadAsync (br);
+				return await Record.ReadAsync (br, rid);
 			}
 		}
 
