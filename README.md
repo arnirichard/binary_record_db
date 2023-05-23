@@ -11,3 +11,4 @@ The purpose is to create a simple thread-safe database with the following proper
 6. All writes are appended to files to ensure data integrity in case of write failure
 7. Changes are written to write-ahead file to ensure performance
 8. Reads will include changes in write-ahead file
+9. Indexes can be created, which maintins a list of sorted records
