@@ -55,6 +55,11 @@ namespace BinaryDB.Utils
 			return BitConverter.ToInt64 (buffer, 0);
 		}
 
+		public bool ReadBool()
+		{
+			return _reader.ReadByte() > 0;
+        }
+
 		public void Dispose ()
 		{
 			_reader.Dispose ();

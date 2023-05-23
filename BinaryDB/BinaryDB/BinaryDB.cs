@@ -134,8 +134,7 @@ namespace BinaryDB
 				throw new Exception("DB is not loaded or has been disposed");
 			}
 
-			// 1. Find Id if needed
-			// All attachments should be written as reference
+			// All attachments should be written as reference and with Id
 			List<Record> result = GetRecordsToWrite (record);
 
 			TaskCompletionSource<Exception?> tcs = new TaskCompletionSource<Exception?> ();
@@ -146,6 +145,7 @@ namespace BinaryDB
 					long idLength = fileSizes.IdLength;
 					long waEnd = fileSizes.WaEnd;
 
+					// Write to ID and WA file
 					foreach (var r in result)
 					{
 						bool writeId;
@@ -160,7 +160,7 @@ namespace BinaryDB
                         waEnd = await WA.WriteRecord (r, fileStreams.WA, waEnd);
 					}
 
-					// Write WaStart, WaEnd, IdLength to file
+					// Update FileSizes
 					taskQueue.AddTask (async delegate 
 					{
 						fileSizes = new FileSizes((byte)(fileSizes.Start == 1 ? 21 : 1),
@@ -169,6 +169,7 @@ namespace BinaryDB
                         await FS.WriteFileSizes (fileStreams.FS, fileSizes);
 					}, WRITE_FS_JOB_ID);
 
+					// Add to WA
 					lock (waQueue)
 					{
 						foreach (var r in result)
@@ -179,9 +180,10 @@ namespace BinaryDB
 						waList = new ReadOnlyCollection<Record>(waQueue.ToList());
 					}
 
+					// Write to DATA
 					taskQueue.AddTask (async delegate
 					{
-						await WriteRecords (result, waEnd); 
+						await MoveRecordsFromWaToData (result, waEnd); 
 					}, id: WRITE_DATA_JOB_ID);
 
 					tcs.SetResult (null);
@@ -198,25 +200,14 @@ namespace BinaryDB
 			return result;
 		}
 
-		public async Task<List<Record>> DeleteAsync(long id, bool withAttachments = true)
-		{
-			RecordId? rid = Get(new RecordId(id));
-			if(rid == null)
-			{
-				return new List<Record>();
-			}
-			return await WriteAsync (
-				new Record(rid, withAttachments ? RecordState.DeletedWithAttachments : RecordState.Deleted));
-		}
-
 		public async Task<Record?> ReadAsync (long id, bool includeWA = true)
 		{
 			if(id <= 0 || !IsLoaded)
 			{
 				return null;
 			}
-
-			TaskCompletionSource<Record?> tcs = new TaskCompletionSource<Record?> ();
+			
+            TaskCompletionSource<Record?> tcs = new TaskCompletionSource<Record?> ();
             ReadOnlyCollection<Record> waList1 = waList;
 
             taskQueue.AddTask (
@@ -225,7 +216,16 @@ namespace BinaryDB
 					Record? record = null;
 					FilePos index;
 
-					lock(idIndex) 
+					// Does the record exist?
+                    RecordId? rid = Get(new RecordId(id));
+
+                    if (rid == null)
+                    {
+                        tcs.SetResult(record);
+                        return;
+					}
+
+                    lock (idIndex) 
 					{
 						if (!idIndex.TryGetValue(id, out index))
 						{
@@ -239,40 +239,43 @@ namespace BinaryDB
 						return;
 					}
 
-					// 1. Read from data file
+					// Read record
 					record = await DATA.ReadRecord (fileStreams.Data, index.Position);
 
-                    // 2. Merge with changes in WA
+                    // Merge with changes in WA
                     if (record != null && includeWA && waList1.Count > 0)
 					{
 						Dictionary<long, Record> ids = record.GetRecordsWithIds ().ToDictionary (r => r.Id.Id, r => r);
-						taskQueue.AddTask (delegate 
-						{
 							List<(Record mergeFrom, Record mergeInto)> toMerge = waList
 								.Where (r => ids.ContainsKey(r.Id.Id))
 								.Select(m => (m, ids[m.Id.Id]))
 								.ToList();
 
-							foreach(var merge in toMerge)
-							{
-								ids[merge.mergeFrom.Id.Id] = merge.mergeFrom.Merge (merge.mergeInto);
-							}
-                            
-							tcs.SetResult(record);
-                        }, ids: ids.Keys.ToList());
+						foreach (var merge in toMerge)
+						{
+							ids[merge.mergeFrom.Id.Id] = merge.mergeFrom.Merge(merge.mergeInto);
+						}
 					}
-					else
-					{
-                        tcs.SetResult(record);
-                    }
-					
-				}, id);
+                    
+					tcs.SetResult(record);
+
+                }, id);
 
 			// 1. Write to WA
 			return await tcs.Task;
 		}
 
-		public async Task<Record?> Read (string extId, int? type = null)
+        public async Task<List<Record>> DeleteAsync(long id)
+        {
+            RecordId? rid = Get(new RecordId(id));
+            if (rid == null)
+            {
+                return new List<Record>();
+            }
+            return await WriteAsync(new Record(rid, RecordState.Deleted));
+        }
+
+        public async Task<Record?> Read (string extId, int? type = null)
 		{
 			long? id = GetId (type, extId);
 
@@ -391,13 +394,17 @@ namespace BinaryDB
 			{
 				foreach(var r in process) 
 				{
-					result.Add(r);
-
-                    if (r.Attachments?.Count > 0) 
+					if(r.State != RecordState.Reference)
+						result.Add(r);
+	
+                    if (r.Attributes?.Count > 0) 
 					{
-						foreach(var a in r.Attachments) 
+						foreach(var a in r.Attributes) 
 						{
-							next.Add (a);
+							if (a.Record != null)
+							{
+								next.Add(a.Record);
+							}
 						}
 					}
 				}
@@ -409,23 +416,35 @@ namespace BinaryDB
 			return result.Select(CreateCopyWithReferences).ToList();
 		}
 
+		// Record to be written should
 		Record CreateCopyWithReferences(Record record)
 		{
 			RecordId id = GetOrCreateNew(record.Id);
 
+			List<Field> attributes = new List<Field>();
+
+			if(record.Attributes != null)
+			{
+				foreach(var a in record.Attributes)
+				{
+					attributes.Add(
+						new Field(a.Type, 
+							a.State, 
+							data: a.Data, 
+							record: a.Record != null ? new Record(a.Record.Id, state: RecordState.Reference) : null));
+				}
+			}
+
             return new Record(id,
-						record.Attributes?.ToList(),
-						// There is case of reference that is non-existing
-						// What if reference is being create in same write?
-                        record.Attachments?.Select(a => new Record(GetOrCreateNew(a.Id).Id)).ToList(),
+						attributes,
 						record.State);
         }
 
-		async Task WriteRecords(List<Record> records, long waEnd)
+		async Task MoveRecordsFromWaToData(List<Record> records, long waEnd)
 		{
-			// 1. Read existing records
+			// 1. Read existing records, without WA updates
 			Dictionary<long, Record?> dict = new ();
-			foreach(var id in records.Select (r => r.Id).Distinct ()) 
+			foreach(var id in records.Select (r => r.Id).Distinct ())
 			{
 				dict[id.Id] = await ReadAsync (id.Id, includeWA: false);
 			}
@@ -473,10 +492,11 @@ namespace BinaryDB
 			{
 				foreach(var record in records) 
 				{
-					if (waQueue.First () == record) {
+					if (waQueue.First () == record) 
+					{
 						waQueue.Dequeue ();
 					} 
-					else 
+					else // Should not happen
 					{
 						var list = waQueue.Where (r => !records.Contains(r));
 						waQueue.Clear ();

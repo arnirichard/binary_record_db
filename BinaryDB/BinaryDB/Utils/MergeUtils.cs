@@ -9,58 +9,29 @@ namespace BinaryDB
 {
 	internal class MergeUtils
 	{
-		public static List<Attribute> MergeAttributes(ReadOnlyCollection<Attribute>? attributes, ReadOnlyCollection<Attribute>? merge)
+		public static List<Field> MergeAttributes(ReadOnlyCollection<Field>? mergeFrom, ReadOnlyCollection<Field>? merge)
 		{
-			List<Attribute> result = attributes?.ToList () ?? new (); ;
+			List<Field> result = mergeFrom?.ToList () ?? new (); ;
 
 			if (merge == null) 
 			{
 				return result;
 			}
 
-			List<Attribute> newAttributes = new ();
-			List<Attribute> removedAttributes = new ();
+			List<Field> newAttributes = new ();
+			List<Field> removedAttributes = new ();
 
 			foreach (var attribute in merge) 
 			{
-				removedAttributes.AddRange(result.Where(a => a.Id == attribute.Id));
-				newAttributes.Add(attribute);
+				removedAttributes.AddRange(result.Where(a => a.Type == attribute.Type));
+				if (attribute.State != FieldState.Deleted)
+				{
+					newAttributes.Add(attribute);
+				}
 			}
 
-			result.RemoveAll (r => removedAttributes.Contains (r));
+			result.RemoveAll(removedAttributes.Contains);
 			result.AddRange(newAttributes);
-
-			return result;
-		}
-
-		public static List<Record> MergeAttachments (ReadOnlyCollection<Record>? attributes, ReadOnlyCollection<Record>? merge)
-		{
-			List<Record> result = attributes?.ToList () ?? new (); ;
-
-			if (merge == null) 
-			{
-				return result;
-			}
-
-			List<Record> newAttachments = new ();
-			List<Record> removedAttachments = new ();
-
-			foreach (var attribute in merge) 
-			{
-				Record? mergeInto = result.FirstOrDefault (r => r.Id == attribute.Id);
-				if(mergeInto == null) 
-				{
-					newAttachments.Add (attribute);
-				}
-				else 
-				{
-					removedAttachments.Add (mergeInto);
-					newAttachments.Add (mergeInto.Merge (attribute));
-				}
-			}
-
-			result.RemoveAll (removedAttachments.Contains);
-			result.AddRange (newAttachments);
 
 			return result;
 		}

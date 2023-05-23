@@ -6,18 +6,21 @@ using BinaryDB.Utils;
 
 namespace BinaryDB
 {
-	public enum RecordState
-	{
-		Full,
-		Partial,
-		Reference,
-		Deleted,
-		DeletedWithAttachments,
-	}
+
+    //using System.Security.Cryptography;
+
+    //// Calculate the CRC32 checksum for a byte array
+    //uint CalculateChecksum(byte[] data)
+    //{
+    //    using (var crc32 = new CRC32())
+    //    {
+    //        return crc32.ComputeHash(data);
+    //    }
+    //}
 
     public class RecordId
     {
-		// Either Id or ExtId must be assigned
+		// Negative Id for attachment?
         public readonly long Id;
         public readonly string? ExtId;
         public readonly int? Type;
@@ -39,27 +42,38 @@ namespace BinaryDB
 		{
 			return new TypeExtId(ExtId, Type);
 		}
+
+        public override string ToString()
+        {
+			return string.Format("{0}: Type {1}, ExtId {2}",
+				Id,
+				Type,
+				ExtId);
+        }
+    }
+
+    public enum RecordState
+    {
+        Full = 0, // Full attribute list
+        Partial = 1, // Has fraction of attributes
+        Reference = 2, // No attributes included
+        Deleted = 2, // Delete record
     }
 
     public class Record
 	{
 		public RecordId Id { get; internal set; }
 		public RecordState State { get; init; }
-		public ReadOnlyCollection<Attribute>? Attributes { get; init; }
-		public ReadOnlyCollection<Record>? Attachments { get; init; }
+		public ReadOnlyCollection<Field>? Attributes { get; init; }
 
-		public Record(RecordId id,
-			List<Attribute>? attributes,
-			List<Record>? attachments,
+        public Record(RecordId id,
+			List<Field>? attributes,
 			RecordState state = RecordState.Full)
 		{
 			Id = id;
 			State = state;
 			Attributes = attributes != null
-				? new ReadOnlyCollection<Attribute>(attributes)
-				: null;
-			Attachments = attachments != null
-				? new ReadOnlyCollection<Record> (attachments)
+				? new ReadOnlyCollection<Field>(attributes)
 				: null;
 		}
 
@@ -78,6 +92,7 @@ namespace BinaryDB
 		internal async Task WriteAsync (AsyncBinaryWriter bw)
 		{
 			await bw.WriteAsync(Id.Id);
+			// But this is in ID file, should skip?
             await bw.WriteAsync(Id.Type);
             await bw.WriteAsync (Id.ExtId);
 			await bw.WriteAsync ((int) State);
@@ -88,14 +103,6 @@ namespace BinaryDB
 				{
 					await attr.WriteAsync (bw);
 				}
-
-			await bw.WriteAsync (Attachments?.Count ?? 0);
-
-			if (Attachments != null)
-				foreach (var attachment in Attachments) 
-				{
-					await attachment.WriteAsync (bw);
-				}
 		}
 
 		internal static async Task<Record> ReadAsync(AsyncBinaryReader br)
@@ -105,17 +112,12 @@ namespace BinaryDB
 			string? extId = await br.ReadStringAsync ();
 			RecordState state = (RecordState) await br.ReadIntAsync ();
 			int attributesCount = await br.ReadIntAsync ();
-			List<Attribute> attributes = new ();
+			List<Field> attributes = new ();
 			for(int i = 0; i < attributesCount; i++) 
 			{
-				attributes.Add (await Attribute.Read (br));
+				attributes.Add (await Field.Read (br));
 			}
-			int recordsCount = await br.ReadIntAsync ();
-			List<Record> records = new ();
-			for (int i = 0; i < recordsCount; i++) {
-				records.Add (await Record.ReadAsync(br));
-			}
-			return new Record (new RecordId(id, type, extId), attributes, records, state: state);
+			return new Record (new RecordId(id, type, extId), attributes, state: state);
 		}
 
 		public List<Record> GetRecordsWithIds()
@@ -134,9 +136,15 @@ namespace BinaryDB
 						result.Add(record);
 					}
 
-					if(record.Attachments?.Count > 0) 
+					if(record.Attributes?.Count > 0)
 					{
-						next.AddRange (record.Attachments);
+						foreach(var att in record.Attributes)
+						{
+							if(att.Record?.Id.Id > 0)
+							{
+								next.Add(att.Record);
+							}
+						}
 					}
 				}
 				process = next;
@@ -158,13 +166,19 @@ namespace BinaryDB
 				return merge;
 			}
 
-			List<Attribute> mergedAttributes = MergeUtils.MergeAttributes (Attributes, merge.Attributes);
-			List<Record> mergedAttachments = MergeUtils.MergeAttachments (Attachments, merge.Attachments);
+			List<Field> mergedAttributes = MergeUtils.MergeAttributes (Attributes, merge.Attributes);
 
 			return new Record (Id,
 				attributes: mergedAttributes,
-				attachments: mergedAttachments,
-				state: RecordState.Full);
+				state: State);
 		}
-	}
+
+        public override string ToString()
+        {
+			return string.Format("{0}: State {1}, Attributes {2}",
+				Id,
+				State,
+				Attributes?.Count ?? 0);
+        }
+    }
 }

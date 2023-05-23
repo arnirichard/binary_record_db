@@ -44,6 +44,11 @@ namespace BinaryDB
             _writer.BaseStream.WriteByte(value);
         }
 
+        public void WriteBool(bool value)
+        {
+            _writer.BaseStream.WriteByte((byte)(value ? 1 : 0));
+        }
+
         public async Task WriteAsync (int value)
 		{
 			byte[] buffer = BitConverter.GetBytes (value);

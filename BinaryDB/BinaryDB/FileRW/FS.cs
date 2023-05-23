@@ -57,16 +57,16 @@ namespace BinaryDB
 		{
 			using(AsyncBinaryWriter bw = new AsyncBinaryWriter(fs)) 
 			{
-                fs.Seek(0, SeekOrigin.Begin);
-				bw.WriteByte(f.Start);
-
 				fs.Seek(f.Start, SeekOrigin.Begin);
                 await bw.WriteAsync (f.WaStart);
 				await bw.WriteAsync (f.WaEnd);
 				await bw.WriteAsync (f.IdLength);
 				await bw.WriteAsync (f.IndexLength);
 				await bw.WriteAsync (f.DataLength);
-			}
+
+                fs.Seek(0, SeekOrigin.Begin);
+                bw.WriteByte(f.Start);
+            }
 		}
 	}
 }
